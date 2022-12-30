@@ -1,0 +1,252 @@
+jenkins server
+===========
+sudo -i
+yum install git -y
+sudo wget -O /etc/yum.repos.d/jenkins.repo https://pkg.jenkins.io/redhat-stable/jenkins.repo
+sudo rpm --import https://pkg.jenkins.io/redhat-stable/jenkins.io.key
+yum install fontconfig java-11-openjdk -y
+sudo amazon-linux-extras install java-openjdk11 -y
+yum install jenkins -y
+service jenkins restart
+=
+Dashboard=>project-1=>Configuration
+(Project url)https://github.com/Nitin824/devops-project.git/
+(Repository URL)https://github.com/Nitin824/devops-project.git
+
+ ======================================================================
+ansible Server
+===========
+useradd ansadmin
+passwd ansadmin [pass]
+visudo
+	ansadmin    ALL=(ALL)       NOPASSWD: ALL( Same thing without a password)
+vi /etc/ssh/sshd_config
+	passwordauthentication: yes
+service sshd reload
+su - ansadmin
+ssh-keygen
+sudo -i
+amazon-linux-extras install ansible2
+vi /etc/ansible/hosts 
+	[ansible]
+	ansible_private_ipaddress
+su - ansadmin
+ssh-copy-id ansadmin@localhost
+ansible all -m ping
+==
+dashboard=>manage jenkins=>available plugins=>install the plungin called "publish over ssh"
+[dashboard=>manage jenkins=>configure system
+add ssh
+	ansible-server(Name)
+	ansible_private_ipaddress
+	ansadmin(username)
+	click on the =>advanced
+	check it(Use password authentication, or use a different key)
+	password of ansadmin(Passphrase / Password)
+	click on the test configuration
+]
+==
+ansible server
+==========
+su - ansadmin
+cd /opt
+sudo mkdir docker
+sudo chown ansadmin:ansadmin docker
+==
+[
+dashboard=>project1=>configuration=>add post-build action
+send build artifacts over ssh
+	devops-project/*(Source files)
+	devops-project(Remove prefix)
+	//opt//docker(Remote directory)
+]
+now finally build the project1, so that u will get files from jenkins to ansible
+==
+ansible server
+==========
+sudo yum install docker -y
+sudo systemctl restart docker
+sudo usermod -G docker ansadmin
+docker login
+	jayavardhan341
+	passwd
+vi Dockerfile
+	FROM httpd:2.4
+	COPY index.html /usr/local/apache2/htdocs/
+	COPY jai.jpg.jpeg /usr/local/apache2/htdocs/
+
+vi create-image.yml
+---
+- hosts: ansible
+  tasks:
+  - name: remove image
+    command: docker rmi jayavardhan341/micdigi:latest
+    ignore_errors: yes
+
+  - name: create docker image
+    command: docker build -t micdigi:latest .
+    args:
+     chdir: /opt/docker
+  - name: create tag to push image onto dockerhub
+    command: docker tag micdigi:latest jayavardhan341/micdigi:latest
+
+  - name: push docker image
+    command: docker push jayavardhan341/micdigi:latest
+
+==
+Dashboard=>project-1=>Configuration=>exec command
+ansible-playbook /opt/docker/create-image.yml
+(now build the project-1, to create & push the image into the dockerhub)
+===========================================================
+k8s Server
+========
+sudo -i
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+exit
+sudo su -
+
+curl -o kubectl https://s3.us-west-2.amazonaws.com/amazon-eks/1.24.7/2022-10-31/bin/linux/amd64/kubectl
+chmod +x kubectl
+mv kubectl /usr/local/bin
+
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+mv /tmp/eksctl /usr/local/bin
+
+==
+ec2fullaccess,vpc,cloudformation,iam,administartor attach these policies to the k8s server
+==
+eksctl create cluster --name babbynani  \
+--region us-east-2 \
+--node-type t2.small
+==
+k8s server
+=======
+vi deployment.yml
+
+apiVersion: apps/v1 
+kind: Deployment
+metadata:
+  name: jayavardhan-micdigi
+  labels: 
+     app: micdigi
+
+spec:
+  replicas: 2 
+  selector:
+    matchLabels:
+      app: micdigi
+  
+  template:
+      metadata:
+      labels:
+        app: micdigi
+    spec:
+      containers:
+      - name: micdigi
+        image: jayavardhan341/micdigi
+        imagePullPolicy: Always
+        ports:
+        - containerPort: 80
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+
+vi service.yml
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: jayavardhan-service
+  labels:
+    app: micdigi
+spec:
+  selector:
+    app: micdigi
+
+  ports:
+    - port: 8080
+      targetPort: 80
+      name: http
+
+  type: LoadBalancer
+
+================================================
+integration k8s with ansible
+[k8s server]
+=========
+useradd ansadmin
+passwd ansadmin
+visudo 
+	ansadmin ALL=(ALL) NOPASSWD: ALL  [Allow root to run any commands anywhere]
+vi /etc/ssh/sshd_config
+	PasswordAuthentication yes
+service sshd reload
+
+ansible
+======
+su - ansadmin
+cd /opt/docker
+vi hosts
+	localhost
+	[kubernetes]
+	k8s_private_ipaddr
+	[ansible]
+	ansible_private_ipaddr
+ssh-copy-id ansadmin@private_k8s_ipaddr
+ansible -i hosts all -a uptime
+
+vi kubernetes_ds.yml
+
+---
+- hosts: kubernetes
+  user: root
+
+  tasks:
+  - name: deploy micdigi on k8s
+    command: kubectl create -f mic-deploy.yml
+    ignore_errors: yes
+  - name: deploy micdigi-service on k8s
+    command: kubectl apply -f mic-service.yml
+    ignore_errors: yes
+  - name: update deployment with new pods if image updated in docker hub
+    command: kubectl rollout restart deployment_name([kubectl get all] get the deployment_name from this command)
+
+
+[kubernetes]
+=========
+sudo su -
+passwd root
+
+[ansible]
+======
+ssh-copy-id root@private_k8s_ipaddr
+ansible-playbook -i /opt/docker/hosts kubernetes_ds.yml --check
+
+[jenkins]
+======
+dashboard=>project=>configure=>execute command
+(remove commands) 
+ansible-playbook  -i /opt/docker/hosts /opt/docker/create-image.yml;
+ansible-playbook  -i /opt/docker/hosts /opt/docker/kubernetes_ds.yml
+
+now build the project toget the expectec o/p
+
+now u can update ur website through git, so that ur updation can be seen
+
+
+
+
+
+
+
+
+
+
+
+
+
+
