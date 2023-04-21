@@ -70,6 +70,10 @@ sudo -i
 docker login
 	jayavardhan341
 	passwd
+exit
+docker login
+	jayavardhan341
+	passwd
 vi Dockerfile
 	FROM httpd:2.4
 	COPY index.html /usr/local/apache2/htdocs/
